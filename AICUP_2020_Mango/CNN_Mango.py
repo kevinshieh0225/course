@@ -132,7 +132,7 @@ def CNNforClassify(file_prefix,pixel):
     # Model Structure
     model = Sequential()
     
-    model.add(Conv2D(filters=64, kernel_size=5, input_shape=(pixel, pixel, 3), activation='relu', padding='same'))
+    model.add(Conv2D(filters=128, kernel_size=5, input_shape=(pixel, pixel, 3), activation='relu', padding='same'))
     model.add(MaxPool2D(pool_size=2, data_format='channels_first'))
     """
     model.add(Conv2D(filters=128, kernel_size=5, activation='relu', padding='same'))
@@ -140,12 +140,14 @@ def CNNforClassify(file_prefix,pixel):
     """
     model.add(Flatten())
     model.add(Dense(512, activation='relu'))
-    model.add(Dense(128, activation='softmax'))
-    model.add(Dense(5, activation='softmax'))
+    model.add(Dropout(0.5))
+    model.add(Dense(128, activation='relu'))
+    model.add(Dropout(0.5))
+    model.add(Dense(5, activation='sigmoid'))
     print(model.summary())
 
     # Train
-    model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
+    model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
     model.fit(train_x, train_y, epochs=10, batch_size=32, verbose=1)
     # Test
     del train_x,train_y
@@ -227,12 +229,12 @@ def VGGnet(file_prefix,pixel):
   model.add(Dropout(0.5))    
   model.add(Dense(4096, activation='relu'))    
   model.add(Dropout(0.5))    
-  model.add(Dense(5, activation='softmax'))
+  model.add(Dense(5, activation='sigmoid'))
 
   print(model.summary())
 
   # Train
-  model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
+  model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
   model.fit(train_x, train_y, epochs=10, batch_size=32, verbose=1)
   # Test
   del train_x,train_y
