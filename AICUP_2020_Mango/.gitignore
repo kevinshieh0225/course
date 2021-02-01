@@ -1,7 +1,10 @@
 detectron2
 C2_TrainDev_Toy
 C2_TrainDev/Train/
+C2_TrainDev/resize/
+*jpg
 C2_TrainDev/Dev/
 C2_TrainDev/E24056954_predict.tsv
 *baseline_vgg16feature_anova_svm/
 Detectron2_Mango.py
+*pt

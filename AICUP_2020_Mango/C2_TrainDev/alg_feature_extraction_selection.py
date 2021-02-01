@@ -35,14 +35,13 @@ class Dataset(Dataset):
         img = self.transform(img)
         return img, self.y[idx]
    
-
 def load_mango_csv(csv_path='./train.csv'):
     label2idx = {
-    '不良-乳汁吸附': 0,
-    '不良-機械傷害': 1,
-    '不良-炭疽病': 2,
-    '不良-著色不佳': 3,
-    '不良-黑斑病': 4
+        '不良-乳汁吸附': 0,
+        '不良-機械傷害': 1,
+        '不良-炭疽病': 2,
+        '不良-著色不佳': 3,
+        '不良-黑斑病': 4
     }
     path = []
     box = []

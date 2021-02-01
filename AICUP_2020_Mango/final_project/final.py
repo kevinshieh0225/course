@@ -18,7 +18,7 @@ from PIL import Image
 
 import torchvision.models as models
 import torch.nn as nn
-from torch.nn import Linear, ReLU, CrossEntropyLoss, Conv2d, MaxPool2d, Module
+from torch.nn import Linear, ReLU, Sigmoid, CrossEntropyLoss, BCELoss, Conv2d, MaxPool2d, Module ,Softmax 
 from torch.optim import Adam
 from tqdm.notebook import tqdm as tqdm
 from ipywidgets import IntProgress
@@ -48,7 +48,66 @@ class myDataset(Dataset):
             tar.append(self.y[idx])
         return tar
     
-    
+# 1.2 不切芒果
+
+def load_mango_csv(csv_path='../C2_TrainDev/train.csv'):
+    label2idx = {
+    '不良-乳汁吸附': 0,
+    '不良-機械傷害': 1,
+    '不良-炭疽病': 2,
+    '不良-著色不佳': 3,
+    '不良-黑斑病': 4
+    }
+    path = []
+    box = []
+    label = []
+    subdir = csv_path.split('/')[-1].split('.')[0].capitalize() #[-1]意思是倒數最後一col，.capitalize()將首英文字母大寫，其他小寫
+    folder = '../C2_TrainDev/'
+    # subdir : Train , Dev
+    # 此時我需要的輸出格式為：
+    # path: 照片路徑 : ./Train/img.jpg
+    # label: 標籤  : [1,0,0,0,0]
+    resize_folder = f'{folder}resize/'
+    if not os.path.isdir(resize_folder):
+        os.makedirs(resize_folder)
+    with open(csv_path, 'r', encoding='utf8') as f:        
+        for line in tqdm(f):
+            clean_line = re.sub(',+\n', '', line).replace('\n', '').replace('\ufeff', '').split(',')
+            curr_img_path = f'{folder}{subdir}/{clean_line[0]}'
+            new_img_path = f'{resize_folder}{subdir}{clean_line[0]}'
+            column = 5
+            curr_label = [0,0,0,0,0]
+            while column <= len(clean_line):
+              symptom = clean_line[column]
+              if symptom in label2idx:
+                curr_label[label2idx[symptom]] = 1
+              column += 5
+            if not os.path.isfile(curr_img_path):
+                print(f'No file for path : {curr_img_path}')
+                continue
+            if not os.path.isfile(new_img_path):
+                img = cv2.imread(curr_img_path, cv2.IMREAD_COLOR)
+                img = cv2.resize(img, (224, 224), interpolation=cv2.INTER_AREA)
+                cv2.imwrite(new_img_path, img)
+            path.append(new_img_path)
+            label.append(curr_label)
+    print('data size: ')
+    print(len(path), len(label))
+    print(path[:6])
+    print(label[:6])
+    count = np.zeros(5)
+    for check in label:
+      count += np.array(check)
+    print('不良-乳汁吸附：'+str(count[0])+' '+str(count[0]/len(label)))
+    print('不良-機械傷害：'+str(count[1])+' '+str(count[1]/len(label)))
+    print('不良-炭疽病：'+str(count[2])+' '+str(count[2]/len(label)))
+    print('不良-著色不佳：'+str(count[3])+' '+str(count[3]/len(label)))
+    print('不良-黑斑病：'+str(count[4])+' '+str(count[4]/len(label)))
+    print()
+    return path, label
+
+
+# 1.2 不切芒果
 def images_aug_balanced(cut_img , label_index ,label,transform,batchsize):
     
     data_x = []
@@ -82,10 +141,9 @@ def images_aug_balanced(cut_img , label_index ,label,transform,batchsize):
     labels = list(map(int, labels))
     weights = sample_weights[labels]
     print(f'train stage balanced')
-    print(f'weights:{weights[:50]}')
     print(f'len:{len(weights)}\n\n')
-    num_samples = len(trainset['train']) if minority_num*4 > majority_num else minority_num*10
-    sampler = Data.WeightedRandomSampler(weights=weights,num_samples = num_samples)
+    num_samples = len(trainset['train']) if minority_num*10 > len(trainset['train']) else minority_num*10
+    sampler = Data.WeightedRandomSampler(weights=weights,num_samples = num_samples,replacement = True)
     trainloader['train'] = DataLoader(trainset['train'], batch_size = batchsize, sampler=sampler)
     
     trainloader['valid'] = DataLoader(trainset['valid'], batch_size = batchsize)
@@ -105,31 +163,22 @@ def train(model,name,n_epochs,train_loader,valid_loader,optimizer,criterion,batc
         model
     """
     print(f'Start to run {name}')
-    if os.path.isfile(f'./result/{name}/result.json'):
-        with open(f'./result/{name}/result.json', 'r') as read_file:
-            history = json.load(read_file)
-        best_train_loss = history['loss']
-        best_train_acc = history['accuracy']
-        best_val_loss = history['val_loss']
-        best_val_acc = history['val_accuracy']
-        best_F1 = history['f1']
-    else:
-        history = {
-            'accuracy':[0],
-            'val_accuracy':[0],
-            'loss':[100],
-            'val_loss':[100],
-            'precision':[0],
-            'recall':[0],
-            'f1':[0]
-        }
-        best_train_loss = 100
-        best_train_acc = 0
-        best_val_loss = 100
-        best_val_acc = 0
-        best_F1 = 0
-    last_epoch = 0
+#     best_train_loss = 100
+#     best_train_acc = 0
+#     best_val_loss = 100
+#     best_val_acc = 0
+#     best_F1 = 0
+#     last_epoch = 0
 
+    history = {
+        'accuracy':[],
+        'val_accuracy':[],
+        'loss':[],
+        'val_loss':[],
+        'precision':[],
+        'recall':[],
+        'f1':[]
+    }
     
     if torch.cuda.is_available():
         model.cuda()
@@ -147,13 +196,15 @@ def train(model,name,n_epochs,train_loader,valid_loader,optimizer,criterion,batc
         #                                              train the model                                              #
         #############################################################################################################
         model.train()
-        for data, target in tqdm(train_loader):
+        print('start train')
+        for num, (data, target) in enumerate(train_loader):
             # move tensors to GPU if CUDA is available
             if torch.cuda.is_available():#train_on_gpu
                 data, target = data.cuda(), target.cuda()
             else:
                 print('1')
             # forward pass: compute predicted outputs by passing inputs to the model
+
             output = model(data)
             # calculate the batch loss
             loss = criterion(output, target)
@@ -170,12 +221,15 @@ def train(model,name,n_epochs,train_loader,valid_loader,optimizer,criterion,batc
             train_losses.append(loss.item()*data.size(0))
             # clear the gradients of all optimized variables
             optimizer.zero_grad()
-        
+            
+            if num%10 == 0 :
+                print(f'{num}/{len(train_loader)}', end='\r')
         #############################################################################################################
         #                                            validate the model                                             #
         #############################################################################################################
         model.eval()
-        for data, target in tqdm(valid_loader):
+        print('start valid')
+        for num, (data, target) in enumerate(valid_loader):
             # move tensors to GPU if CUDA is available
             if torch.cuda.is_available():#train_on_gpu
                 data, target = data.cuda(), target.cuda()
@@ -194,7 +248,9 @@ def train(model,name,n_epochs,train_loader,valid_loader,optimizer,criterion,batc
             #confusion matrix
             stacked = torch.stack((target,pred.t()[0]),dim=1)
             confusion_stacks += stacked.cpu().detach().tolist()
-        
+            
+            if num%10 == 0 :
+                print(f'{num}/{len(valid_loader)}', end='\r')
         #############################################################################################################
         #                                     print train/val/cmt epoch result                                      #
         #############################################################################################################
@@ -204,8 +260,8 @@ def train(model,name,n_epochs,train_loader,valid_loader,optimizer,criterion,batc
         # calculate average accuracy
         train_acc=train_correct/train_total
         valid_acc=val_correct/val_total
-        print(f'\tTraining Loss: {train_loss:.3f} \tValidation Loss: {valid_loss:.3f}')
-        print(f'\tTraining Accuracy: {train_acc:.3f} \tValidation Accuracy: {valid_acc:.3f}')
+        print(f'Training Loss: {train_loss:.3f} \tValidation Loss: {valid_loss:.3f}')
+        print(f'Training Accuracy: {train_acc:.3f} \tValidation Accuracy: {valid_acc:.3f}')
         
         cmt = torch.zeros(2,2, dtype=torch.int64)
         for p in confusion_stacks:
@@ -219,7 +275,7 @@ def train(model,name,n_epochs,train_loader,valid_loader,optimizer,criterion,batc
         TN = cmt[1,0].item()
         
         p = np.float64(TP / (TP + FP))
-        r = np.float64(TP / (TP + FN))
+        r = np.float64(TP / (TP + FN)) if TP + FN != 0 else 0
         F1 = np.float64(2 * r * p / (r + p))
         
         print(f'precision = {p}\trecall = {r}\tF1 = {F1}\n\n')
@@ -235,42 +291,45 @@ def train(model,name,n_epochs,train_loader,valid_loader,optimizer,criterion,batc
         #############################################################################################################
         #                                              Early Stopping                                               #
         #############################################################################################################
-        if best_F1 >= F1:
-            trigger_times += 1
-            print(f'trigger times: {trigger_times}\n')
-            if trigger_times > patience:
-                print(f'Early stopping at trigger times: {trigger_times}')
-                print(f'Least Training Loss: {best_train_loss:.4f} \nLeast Validation Loss: {best_val_loss:.4f}')
-                print(f'Best Training Accuracy: {best_train_acc:.4f} \nBest Validation Accuracy: {best_val_acc:.4f}')
-                print(f'Best f1-score: {best_F1:.4f}')
-                last_epoch = epoch
-                break
-        else:
-            save_json = {
-                'accuracy':[train_acc],
-                'val_accuracy':[valid_acc],
-                'loss':[train_loss],
-                'val_loss':[valid_loss],
-                'precision':[p],
-                'recall':[r],
-                'f1':[F1]
-            }
-            with open(f'./result/{name}/result.json', 'w') as json_file:
-                json.dump(save_json, json_file)
+#         if best_F1 >= F1:
+#             trigger_times += 1
+#             print(f'trigger times: {trigger_times}\n')
+#             if trigger_times > patience:
+#                 print(f'Early stopping at trigger times: {trigger_times}')
+#                 print(f'Least Training Loss: {best_train_loss:.4f} \nLeast Validation Loss: {best_val_loss:.4f}')
+#                 print(f'Best Training Accuracy: {best_train_acc:.4f} \nBest Validation Accuracy: {best_val_acc:.4f}')
+#                 print(f'Best f1-score: {best_F1:.4f}')
+#                 last_epoch = epoch
+#                 break
+#         else:
+#             save_json = {
+#                 'accuracy':[train_acc],
+#                 'val_accuracy':[valid_acc],
+#                 'loss':[train_loss],
+#                 'val_loss':[valid_loss],
+#                 'precision':[p],
+#                 'recall':[r],
+#                 'f1':[F1]
+#             }
+#             with open(f'./result/{name}/result.json', 'w') as json_file:
+#                 json.dump(save_json, json_file)
                 
-            trigger_times = 0
-            torch.save(model, f'./result/{name}/model.pt')
-            best_train_loss = train_loss
-            best_train_acc = train_acc
-            best_val_loss = valid_loss
-            best_val_acc = valid_acc
-            best_F1 = F1
+#             trigger_times = 0
+#             torch.save(model, f'./result/{name}/model.pt')
+#             best_train_loss = train_loss
+#             best_train_acc = train_acc
+#             best_val_loss = valid_loss
+#             best_val_acc = valid_acc
+#             best_F1 = F1
     
         #############################################################################################################
         #                                                Draw picture                                               #
         #############################################################################################################
-        
-    x = np.arange(1,last_epoch+1,1)
+    
+    with open(f'./result/{name}/result.json', 'w') as json_file:
+        json.dump(history, json_file)
+    
+    x = np.arange(1,n_epochs+1,1)
     train_acc = history['accuracy']
     val_acc = history['val_accuracy']
     train_loss = history['loss']
@@ -284,23 +343,23 @@ def train(model,name,n_epochs,train_loader,valid_loader,optimizer,criterion,batc
     plt.title(f"{name} Accuracy")
     plt.xlabel("Epoch")
     plt.ylabel("Accuracy")
-    plt.plot(x, train_acc[1:], label='training')
-    plt.plot(x, val_acc[1:], label='validation')
+    plt.plot(x, train_acc, label='training')
+    plt.plot(x, val_acc, label='validation')
     plt.legend(loc='lower right')
 
     plt.subplot(2,2,2)
     plt.title(f"{name} Loss")
     plt.xlabel("Epoch")
     plt.ylabel("Loss")
-    plt.plot(x, train_loss[1:], label='training')
-    plt.plot(x, val_loss[1:], label='validation')
+    plt.plot(x, train_loss, label='training')
+    plt.plot(x, val_loss, label='validation')
     plt.legend(loc='upper right')
     
     plt.subplot(2,2,3)
     plt.title(f"{name} F1-score")
     plt.xlabel("Epoch")
     plt.ylabel("f1-score")
-    plt.plot(x, f1[1:], label='f1')
+    plt.plot(x, f1, label='f1')
     plt.legend(loc='upper right')
     
     #save result
@@ -310,8 +369,9 @@ def train(model,name,n_epochs,train_loader,valid_loader,optimizer,criterion,batc
 if __name__ == '__main__':
     device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
     print('GPU State:', device)
-    # 1. load and cut：讀檔並切芒果
-    ## output : cut_img, label_index
+
+    # 1.1 load and cut：讀檔並切芒果
+    ## output : path, label
 
     dir_path = "./../C2_TrainDev"
     dest = "./../C2_TrainDev_After_Cut"
@@ -319,23 +379,19 @@ if __name__ == '__main__':
     subdir = ['Dev', 'Train']
     for sub in subdir:
         new_dir = os.path.join(dest, sub)
-    if not os.path.isdir(new_dir):
-      try:
-          os.makedirs(new_dir)
-      except OSError as e:
-          print(e)
-      else:
-          print(f"Successfully created the directory {new_dir}")
-    path, box, label = cut.load_mango_csv(csv_path=f'{dir_path}/train.csv',dir_path = dir_path)
+        if not os.path.isdir(new_dir):
+          try:
+              os.makedirs(new_dir)
+          except OSError as e:
+              print(e)
+          else:
+              print(f"Successfully created the directory {new_dir}")
+    path_train, box_train, label_train = cut.load_mango_csv(csv_path=f'{dir_path}/train.csv',dir_path = dir_path)
+    path_dev, box_dev, label_dev = cut.load_mango_csv(csv_path=f'{dir_path}/dev.csv',dir_path = dir_path)
     print('Start Cutting')
-    cut_img = cut.cut_mango(path, dest=dest, isCut=True, box=box)
+    cut_img_train = cut.cut_mango(path_train, dest=dest, isCut=True, box=box_train)
+    cut_img_dev = cut.cut_mango(path_dev, dest=dest, isCut=True, box=box_dev)
     print('Finish Cutting')
-
-    print(path[:10])
-    print(box[:10])
-    print(label[:10])
-    print(cut_img[:3])
-    print(len(cut_img))
 
     label2idx = {
         '不良-乳汁吸附': 0,
@@ -344,73 +400,82 @@ if __name__ == '__main__':
         '不良-著色不佳': 3,
         '不良-黑斑病': 4
     }
-    label_index = []
-    for check in label:
+    label_index = label_train + label_dev
+    label = []
+    for check in label_index:
         new = [0,0,0,0,0]
         for check_ in check:
             new[label2idx[check_]] = 1
-        label_index.append(new)
-    print(label_index[:10])
-
-    # 2. binary classification and balanced：把五類分開來，變成（1,0）問題
-    ## 使multi-label 成為 five multi-class problem
-    ## output : 分成五類的 dataloader
+        label.append(new)
+    print(label[:10])  
+    
+    path = cut_img_train + cut_img_dev
+    
+    
 
     transform = torchvision.transforms.Compose([
-    torchvision.transforms.RandomHorizontalFlip(),
-    torchvision.transforms.RandomRotation(15, resample=PIL.Image.BILINEAR),
-    torchvision.transforms.ToTensor(),
-    torchvision.transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
+        torchvision.transforms.Resize((224,224)),
+        torchvision.transforms.RandomHorizontalFlip(),
+        torchvision.transforms.RandomRotation(15, resample=PIL.Image.BILINEAR),
+        torchvision.transforms.ToTensor(),
+        torchvision.transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
     ])
 
     batchsize = 32
-#     dataloader_0 = images_aug_balanced(cut_img , label_index, 0, transform, batchsize)
-#     dataloader_1 = images_aug_balanced(cut_img , label_index, 1, transform, batchsize)
-#     dataloader_2 = images_aug_balanced(cut_img , label_index, 2, transform, batchsize)
-#     dataloader_3 = images_aug_balanced(cut_img , label_index, 3, transform, batchsize)
-#     dataloader_4 = images_aug_balanced(cut_img , label_index, 4, transform, batchsize)
-
-#     for stage in ['train' , 'valid']:
-#         print(f'len of 0 {stage}:{len(dataloader_0[stage])} from {len(dataloader_0[stage])*batchsize}')
-#         print(f'len of 1 {stage}:{len(dataloader_1[stage])} from {len(dataloader_1[stage])*batchsize}')
-#         print(f'len of 2 {stage}:{len(dataloader_2[stage])} from {len(dataloader_2[stage])*batchsize}')
-#         print(f'len of 3 {stage}:{len(dataloader_3[stage])} from {len(dataloader_3[stage])*batchsize}')
-#         print(f'len of 4 {stage}:{len(dataloader_4[stage])} from {len(dataloader_4[stage])*batchsize}\n')
-
-
 
     # 2. Train fine-tune model
-    ## 使用wide resnet50_2來進行pretrained
+    ## 使用 vgg16 pretrained 來做 finetune
     ## output : 五個ft wr
 
     # Class iter ：wide_resnet50_2 finetune
-#     
-
-#     name = 'model_ft_wide_resnet50_class_0'
-#     name = 'model_ft_wide_resnet50_class_1'
-#     name = 'model_ft_wide_resnet50_class_2'
-#     name = 'model_ft_wide_resnet50_class_3'
-    name = 'model_ft_wide_resnet50_class_4'
-    name_iter = ['model_ft_wide_resnet50_class_0', 'model_ft_wide_resnet50_class_1','model_ft_wide_resnet50_class_2','model_ft_wide_resnet50_class_3','model_ft_wide_resnet50_class_4',]
     
-    for class_index, name in enumerate(name_iter):
+    
+    for class_index in range(5):
+        ##############################################自己取名########################################################
+        name = f'model_ft_wide_resnet50_class_{class_index}_opt_NN_CE'
+        ##############################################自己取名########################################################
         batchsize = 32
-        wide_resnet_dataloader = images_aug_balanced(cut_img , label_index, class_index, transform, batchsize)
+        
+        # 2.1 binary classification and balanced：把五類分開來，變成（1,0）問題
+        ## 使 multi-label 成為 five multi-class problem
+        ## output : 分成五類的 dataloader
+        wide_resnet_dataloader = images_aug_balanced(path , label, class_index, transform, batchsize)
         for stage in ['train','valid']:
             print(f'len of {stage}:{len(wide_resnet_dataloader[stage])} from {len(wide_resnet_dataloader[stage])*batchsize}')
 
 
         if not os.path.isdir(f'./result/{name}/'):
             os.makedirs(f'./result/{name}/')
+        else:
+            continue
+        #############################################################################################################
+        #                                               ft model setting                                            #
+        #############################################################################################################
         model_ft = models.wide_resnet50_2(pretrained=True)
+        for param in model_ft.parameters():
+            param.requires_grad = False
+#         model_ft.layer1.requires_grad = True
+#         model_ft.layer2.requires_grad = True
+#         model_ft.layer3.requires_grad = True
+#         model_ft.layer4.requires_grad = True
+#         model_ft.avgpool.requires_grad = True
+#         model_ft.fc.requires_grad = True
         num_ftrs = model_ft.fc.in_features
-        model_ft.fc = nn.Linear(num_ftrs,2)
+        model_ft.fc  = nn.Sequential(
+            nn.Linear(num_ftrs, 2),
+        )
         model_ft = model_ft.to(device)# 放入裝置
 
-        n_epochs = 100
+        n_epochs = 10
         optimizer = torch.optim.Adam([
             {'params':model_ft.parameters()}
         ], lr=0.0001)
+        
+        #############################################################################################################
+        #                                               ft model setting                                            #
+        #############################################################################################################
+        
+        
         criterion = nn.CrossEntropyLoss()
         patience = 3
         train(model_ft,
